@@ -3,7 +3,10 @@
 //! held in an [`ObjectStore`], and can still only be actually used on the
 //! owning thread.
 
-use std::{marker::PhantomData, sync::Arc};
+use std::{
+    marker::PhantomData,
+    sync::{Arc, Weak},
+};
 
 use rich_phantoms::PhantomInvariantAlwaysSendSync;
 use slab::Slab;
@@ -20,7 +23,7 @@ pub struct ObjectRef<T> {
 }
 
 struct Object<T> {
-    rc: Arc<PhantomInvariantAlwaysSendSync<T>>,
+    rc: Weak<PhantomInvariantAlwaysSendSync<T>>,
     data: T,
 }
 
@@ -54,18 +57,17 @@ impl<T> ObjectStore<T> {
     pub fn clean(&mut self) {
         // Note that `slab.retain` makes sure that indexes all stay valid even
         // when elements are removed, unlike `Vec::retain`.
-        self.slab.retain(|_i, obj| {
-            // If another reference is held to the Arc, then `get_mut` will
-            // return `None`. These are the objects that we want to keep.
-            Arc::get_mut(&mut obj.rc).is_none()
-        })
+        self.slab.retain(|_i, obj| obj.rc.strong_count() > 0)
     }
 
     pub fn insert(&mut self, data: T) -> ObjectRef<T> {
         let rc = Arc::new(PhantomData);
         let rc_for_return = rc.clone();
 
-        let obj = Object { rc, data };
+        let obj = Object {
+            rc: Arc::downgrade(&rc),
+            data,
+        };
 
         let index = self.slab.insert(obj);
 
