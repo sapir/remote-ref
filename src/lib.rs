@@ -25,7 +25,7 @@ use slab::Slab;
 #[derive(Clone, Debug)]
 pub struct ObjectRef<T> {
     index: usize,
-    _rc: Arc<PhantomInvariantAlwaysSendSync<T>>,
+    rc: Arc<PhantomInvariantAlwaysSendSync<T>>,
 }
 
 struct Object<T> {
@@ -39,7 +39,8 @@ struct Object<T> {
 /// need to be on the thread owning the [`ObjectStore`].
 ///
 /// `ObjectStore::clean` should be called once in a while to drop any unused
-/// objects.
+/// objects, or else [`ObjectStore::remove`] should be called on objects when
+/// dropping them.
 pub struct ObjectStore<T> {
     slab: Slab<Object<T>>,
 }
@@ -79,7 +80,29 @@ impl<T> ObjectStore<T> {
 
         ObjectRef {
             index,
-            _rc: rc_for_return,
+            rc: rc_for_return,
+        }
+    }
+
+    /// Remove an object reference from the object store. If the reference count
+    /// is then zero, the stored object is dropped and returned. If there are
+    /// still any other active references, None is returned.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the reference doesn't belong to this store.
+    pub fn remove(&mut self, obj_ref: ObjectRef<T>) -> Option<T> {
+        let index = obj_ref.index;
+
+        // Verify that we're using the correct store
+        assert_eq!(Arc::as_ptr(&obj_ref.rc), Weak::as_ptr(&self.slab[index].rc));
+
+        if Arc::try_unwrap(obj_ref.rc).is_ok() {
+            // That was the last strong reference - remove the object from the
+            // store.
+            Some(self.slab.remove(index).data)
+        } else {
+            None
         }
     }
 }
