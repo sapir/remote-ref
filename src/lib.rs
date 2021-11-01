@@ -33,6 +33,13 @@ struct Object<T> {
     data: T,
 }
 
+impl<T> Object<T> {
+    /// Panics if the reference doesn't belong to the same store as `self`.
+    fn verify(&self, obj_ref: &ObjectRef<T>) {
+        assert_eq!(Arc::as_ptr(&obj_ref.rc), Weak::as_ptr(&self.rc));
+    }
+}
+
 /// A storage allowing references to objects that aren't `Send` or `Sync`. The
 /// references ([`ObjectRef`]s) can be held in other threads, even if `T` isn't
 /// `Send` or `Sync`, because in such a case, to access the object, you'll still
@@ -52,12 +59,26 @@ impl<T> Default for ObjectStore<T> {
 }
 
 impl<T> ObjectStore<T> {
+    /// Returns a reference to the object referred to by `obj_ref`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the reference doesn't belong to this store.
     pub fn get(&self, obj_ref: &ObjectRef<T>) -> &T {
-        &self.slab[obj_ref.index].data
+        let obj = &self.slab[obj_ref.index];
+        obj.verify(obj_ref);
+        &obj.data
     }
 
+    /// Returns a mutable reference to the object referred to by `obj_ref`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the reference doesn't belong to this store.
     pub fn get_mut(&mut self, obj_ref: &ObjectRef<T>) -> &mut T {
-        &mut self.slab[obj_ref.index].data
+        let obj = &mut self.slab[obj_ref.index];
+        obj.verify(obj_ref);
+        &mut obj.data
     }
 
     /// Garbage-collects unused objects.
@@ -94,8 +115,7 @@ impl<T> ObjectStore<T> {
     pub fn remove(&mut self, obj_ref: ObjectRef<T>) -> Option<T> {
         let index = obj_ref.index;
 
-        // Verify that we're using the correct store
-        assert_eq!(Arc::as_ptr(&obj_ref.rc), Weak::as_ptr(&self.slab[index].rc));
+        self.slab[index].verify(&obj_ref);
 
         if Arc::try_unwrap(obj_ref.rc).is_ok() {
             // That was the last strong reference - remove the object from the
